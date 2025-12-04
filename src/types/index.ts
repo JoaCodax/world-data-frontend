@@ -1,34 +1,18 @@
+// Country: [code, name, latestPop, rank]
+export type CompactCountry = [string, string, number | null, number | null];
+
+// Population data: { code: [[year, pop], ...] }
+export type PopulationData = Record<string, [number, number][]>;
+
+export interface AllDataResponse {
+  countries: CompactCountry[];
+  population: PopulationData;
+}
+
+// Parsed country for UI
 export interface Country {
-  id: number;
   code: string;
   name: string;
-  latest_population: number | null;
+  latestPopulation: number | null;
   rank: number | null;
 }
-
-export interface CountryListResponse {
-  countries: Country[];
-}
-
-export interface PopulationDataPoint {
-  year: number;
-  population: number;
-}
-
-export interface CountryPopulationSeries {
-  code: string;
-  name: string;
-  data: PopulationDataPoint[];
-}
-
-export interface PopulationResponse {
-  series: CountryPopulationSeries[];
-  year_range: [number, number];
-}
-
-export interface PopulationQueryParams {
-  country_codes?: string[];
-  year_start?: number;
-  year_end?: number;
-}
-

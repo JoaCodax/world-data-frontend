@@ -1,19 +1,21 @@
 import { useQuery } from '@tanstack/react-query';
-import { countriesApi, populationApi } from '../api/client';
-import type { PopulationQueryParams } from '../types';
+import { fetchAllData } from '../api/client';
+import type { Country } from '../types';
 
-export function useCountries() {
+export function useAllData() {
   return useQuery({
-    queryKey: ['countries'],
-    queryFn: countriesApi.getAll,
+    queryKey: ['allData'],
+    queryFn: fetchAllData,
+    staleTime: Infinity, // Data doesn't change during session
   });
 }
 
-export function usePopulation(params: PopulationQueryParams, enabled: boolean = true) {
-  return useQuery({
-    queryKey: ['population', params],
-    queryFn: () => populationApi.get(params),
-    enabled: enabled && (params.country_codes?.length ?? 0) > 0,
-  });
+// Parse compact country array to object
+export function parseCountries(data: [string, string, number | null, number | null][]): Country[] {
+  return data.map(([code, name, latestPopulation, rank]) => ({
+    code,
+    name,
+    latestPopulation,
+    rank,
+  }));
 }
-

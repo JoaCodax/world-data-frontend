@@ -1,42 +1,41 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Range, getTrackBackground } from 'react-range';
 
-interface YearRangeSliderProps {
+interface YearSliderProps {
   min: number;
   max: number;
-  values: [number, number];
-  onChange: (values: [number, number]) => void;
-  embedded?: boolean;
+  value: number;
+  onChange: (value: number) => void;
 }
 
-export function YearRangeSlider({ min, max, values, onChange, embedded = false }: YearRangeSliderProps) {
+export function YearSlider({ min, max, value, onChange }: YearSliderProps) {
   // Local state for immediate visual feedback
-  const [localValues, setLocalValues] = useState<[number, number]>(values);
+  const [localValue, setLocalValue] = useState(value);
   const rafRef = useRef<number | null>(null);
-  const pendingValues = useRef<[number, number] | null>(null);
+  const pendingValue = useRef<number | null>(null);
 
   // Sync local state when props change (e.g., from play button or external source)
   useEffect(() => {
-    setLocalValues(values);
-  }, [values]);
+    setLocalValue(value);
+  }, [value]);
 
   // Flush pending changes using requestAnimationFrame for smooth updates
   const flushChanges = useCallback(() => {
-    if (pendingValues.current) {
-      onChange(pendingValues.current);
-      pendingValues.current = null;
+    if (pendingValue.current !== null) {
+      onChange(pendingValue.current);
+      pendingValue.current = null;
     }
   }, [onChange]);
 
   // Handle slider change with RAF-throttled parent updates
-  const handleChange = useCallback((newValues: number[]) => {
-    const typedValues: [number, number] = [newValues[0], newValues[1]];
+  const handleChange = useCallback((values: number[]) => {
+    const newValue = values[0];
     
     // Update local state immediately for visual feedback
-    setLocalValues(typedValues);
+    setLocalValue(newValue);
     
-    // Store pending values
-    pendingValues.current = typedValues;
+    // Store pending value
+    pendingValue.current = newValue;
     
     // Schedule parent update on next animation frame (throttles to ~60fps)
     if (rafRef.current === null) {
@@ -56,19 +55,13 @@ export function YearRangeSlider({ min, max, values, onChange, embedded = false }
     };
   }, []);
 
-  const content = (
-    <>
+  return (
+    <div className="w-full">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium text-gray-500">Year Range</h3>
-        <div className="flex items-center gap-2 text-sm">
-          <span className="px-2 py-1 bg-pastel-purple/20 rounded-lg font-semibold text-pastel-mauve">
-            {localValues[0]}
-          </span>
-          <span className="text-gray-400">—</span>
-          <span className="px-2 py-1 bg-pastel-purple/20 rounded-lg font-semibold text-pastel-mauve">
-            {localValues[1]}
-          </span>
-        </div>
+        <h3 className="text-sm font-medium text-gray-500">Year</h3>
+        <span className="px-3 py-1 bg-pastel-purple/20 rounded-lg font-semibold text-pastel-mauve text-sm">
+          {localValue}
+        </span>
       </div>
       
       <div className="px-2">
@@ -76,7 +69,7 @@ export function YearRangeSlider({ min, max, values, onChange, embedded = false }
           step={1}
           min={min}
           max={max}
-          values={localValues}
+          values={[localValue]}
           onChange={handleChange}
           renderTrack={({ props, children }) => (
             <div
@@ -84,8 +77,8 @@ export function YearRangeSlider({ min, max, values, onChange, embedded = false }
               className="h-2 w-full rounded-full"
               style={{
                 background: getTrackBackground({
-                  values: localValues,
-                  colors: ['#e5e7eb', '#957DAD', '#e5e7eb'],
+                  values: [localValue],
+                  colors: ['#957DAD', '#e5e7eb'],
                   min,
                   max,
                 }),
@@ -114,16 +107,6 @@ export function YearRangeSlider({ min, max, values, onChange, embedded = false }
         <span>{min}</span>
         <span>{max}</span>
       </div>
-    </>
-  );
-
-  if (embedded) {
-    return <div className="w-full">{content}</div>;
-  }
-
-  return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-      {content}
     </div>
   );
 }

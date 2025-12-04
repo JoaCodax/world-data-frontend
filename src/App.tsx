@@ -1,74 +1,301 @@
-import { useState, useMemo, useEffect } from 'react';
-import { useCountries, usePopulation } from './hooks/usePopulationData';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useAllData, parseCountries } from './hooks/usePopulationData';
 import { PopulationChart } from './components/PopulationChart';
-import { CountrySidebar } from './components/CountrySidebar';
+import { CountrySidebar, type SidebarMode } from './components/CountrySidebar';
 import { YearRangeSlider } from './components/YearRangeSlider';
+import { YearSlider } from './components/YearSlider';
+import { ChartTabs, type ViewType } from './components/ChartTabs';
+import { PlayButton } from './components/PlayButton';
+import { PieChart } from './components/PieChart';
+import { BarChart } from './components/BarChart';
+import { WorldMap } from './components/WorldMap';
+import { DataTable } from './components/DataTable';
 
-const MIN_YEAR = 2000;
-const MAX_YEAR = new Date().getFullYear();
 const DEFAULT_TOP_COUNTRIES = 10;
 
 export default function App() {
   const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
-  const [yearRange, setYearRange] = useState<[number, number]>([MIN_YEAR, MAX_YEAR]);
+  const [yearRange, setYearRange] = useState<[number, number] | null>(null);
+  const [singleYear, setSingleYear] = useState<number>(2023);
   const [initialized, setInitialized] = useState(false);
+  const [activeView, setActiveView] = useState<ViewType>('line');
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [labeledCountries, setLabeledCountries] = useState<Set<string>>(new Set());
 
-  // Fetch all countries
-  const { data: countriesData, isLoading: isLoadingCountries } = useCountries();
+  const { data, isLoading } = useAllData();
+
+  // Parse countries from compact format
+  const countries = useMemo(() => {
+    if (!data) return [];
+    return parseCountries(data.countries);
+  }, [data]);
+
+  // Calculate available year range from all data (null until data loads)
+  const availableYearRange = useMemo((): [number, number] | null => {
+    if (!data) {
+      return null;
+    }
+
+    let minYear = Infinity;
+    let maxYear = -Infinity;
+
+    for (const code of Object.keys(data.population)) {
+      const popData = data.population[code];
+      if (!popData || popData.length === 0) continue;
+
+      for (const [year] of popData) {
+        if (year < minYear) minYear = year;
+        if (year > maxYear) maxYear = year;
+      }
+    }
+
+    if (minYear === Infinity || maxYear === -Infinity) {
+      return null;
+    }
+
+    return [minYear, maxYear];
+  }, [data]);
+
+  // Get all years in data
+  const allYears = useMemo(() => {
+    if (!availableYearRange) return [];
+    const years: number[] = [];
+    for (let y = availableYearRange[0]; y <= availableYearRange[1]; y++) {
+      years.push(y);
+    }
+    return years;
+  }, [availableYearRange]);
+
+  // Initialize yearRange and singleYear when availableYearRange changes
+  useEffect(() => {
+    // Only initialize once data is loaded
+    if (!availableYearRange) return;
+
+    if (yearRange === null) {
+      // First time initialization
+      const defaultStartYear = Math.max(2000, availableYearRange[0]);
+      setYearRange([defaultStartYear, availableYearRange[1]]);
+      setSingleYear(availableYearRange[1]);
+    } else {
+      // Clamp existing yearRange to the available bounds
+      const clampedStart = Math.min(Math.max(yearRange[0], availableYearRange[0]), availableYearRange[1]);
+      const clampedEnd = Math.min(Math.max(yearRange[1], availableYearRange[0]), availableYearRange[1]);
+      if (clampedStart !== yearRange[0] || clampedEnd !== yearRange[1]) {
+        setYearRange([clampedStart, clampedEnd]);
+      }
+      // Clamp singleYear to the available range
+      setSingleYear(prev => Math.min(Math.max(prev, availableYearRange[0]), availableYearRange[1]));
+    }
+  }, [availableYearRange, yearRange]);
 
   // Auto-select top 10 countries on first load
   useEffect(() => {
-    if (countriesData && !initialized) {
-      const topCountries = countriesData.countries
+    if (countries.length > 0 && !initialized) {
+      const topCountries = countries
         .filter(c => c.rank !== null)
         .slice(0, DEFAULT_TOP_COUNTRIES)
         .map(c => c.code);
       setSelectedCodes(new Set(topCountries));
+      setLabeledCountries(new Set(topCountries));
       setInitialized(true);
     }
-  }, [countriesData, initialized]);
+  }, [countries, initialized]);
 
-  // Prepare country codes for API call
-  const selectedCodesArray = useMemo(() => Array.from(selectedCodes), [selectedCodes]);
+  // Use effective year range (fallback to available if null)
+  const effectiveYearRange = yearRange ?? availableYearRange;
 
-  // Fetch population data for selected countries
-  const { data: populationData, isLoading: isLoadingPopulation } = usePopulation({
-    country_codes: selectedCodesArray,
-    year_start: yearRange[0],
-    year_end: yearRange[1],
-  }, selectedCodes.size > 0);
+  // Filter population data for selected countries and year range (for line chart)
+  const lineChartData = useMemo(() => {
+    if (!data) return [];
+    
+    const result: { code: string; name: string; data: [number, number][] }[] = [];
+    
+    for (const country of countries) {
+      if (!selectedCodes.has(country.code)) continue;
+      
+      const popData = data.population[country.code];
+      if (!popData) continue;
+      
+      const filtered = popData.filter(
+        ([year]) => year >= effectiveYearRange[0] && year <= effectiveYearRange[1]
+      );
+      
+      result.push({
+        code: country.code,
+        name: country.name,
+        data: filtered,
+      });
+    }
+    
+    return result;
+  }, [data, countries, selectedCodes, effectiveYearRange]);
 
-  // Handle country toggle
-  const handleToggle = (code: string) => {
-    setSelectedCodes(prev => {
-      const next = new Set(prev);
-      if (next.has(code)) {
-        next.delete(code);
-      } else {
-        next.add(code);
+  // Data for pie chart (single year, selected countries)
+  const pieChartData = useMemo(() => {
+    if (!data) return [];
+    
+    const result: { code: string; name: string; population: number }[] = [];
+    
+    for (const country of countries) {
+      if (!selectedCodes.has(country.code)) continue;
+      
+      const popData = data.population[country.code];
+      if (!popData) continue;
+      
+      const yearData = popData.find(([y]) => y === singleYear);
+      if (!yearData) continue;
+      
+      result.push({
+        code: country.code,
+        name: country.name,
+        population: yearData[1],
+      });
+    }
+    
+    return result;
+  }, [data, countries, selectedCodes, singleYear]);
+
+  // Data for bar chart (single year, selected countries)
+  const barChartData = useMemo(() => {
+    if (!data) return [];
+    
+    const result: { code: string; name: string; population: number }[] = [];
+    
+    for (const country of countries) {
+      if (!selectedCodes.has(country.code)) continue;
+      
+      const popData = data.population[country.code];
+      if (!popData) continue;
+      
+      const yearData = popData.find(([y]) => y === singleYear);
+      if (!yearData) continue;
+      
+      result.push({
+        code: country.code,
+        name: country.name,
+        population: yearData[1],
+      });
+    }
+    
+    return result;
+  }, [data, countries, selectedCodes, singleYear]);
+
+  // Data for world map (single year, ALL countries)
+  const worldMapData = useMemo(() => {
+    if (!data) return [];
+    
+    const result: { code: string; name: string; population: number }[] = [];
+    
+    for (const country of countries) {
+      const popData = data.population[country.code];
+      if (!popData) continue;
+      
+      const yearData = popData.find(([y]) => y === singleYear);
+      if (!yearData) continue;
+      
+      result.push({
+        code: country.code,
+        name: country.name,
+        population: yearData[1],
+      });
+    }
+    
+    return result;
+  }, [data, countries, singleYear]);
+
+  // Data for table (ALL countries)
+  const tableData = useMemo(() => {
+    if (!data) return [];
+    
+    return countries.map(country => {
+      const popData = data.population[country.code] || [];
+      const populationByYear = new Map<number, number>();
+      
+      for (const [year, pop] of popData) {
+        populationByYear.set(year, pop);
       }
-      return next;
+      
+      return {
+        code: country.code,
+        name: country.name,
+        populationByYear,
+      };
     });
+  }, [data, countries]);
+
+  const handleToggle = (code: string) => {
+    if (activeView === 'pie') {
+      // For pie chart, toggle labels
+      setLabeledCountries(prev => {
+        const next = new Set(prev);
+        if (next.has(code)) {
+          next.delete(code);
+        } else {
+          next.add(code);
+        }
+        return next;
+      });
+    } else {
+      // For other views, toggle selection
+      setSelectedCodes(prev => {
+        const next = new Set(prev);
+        if (next.has(code)) {
+          next.delete(code);
+        } else {
+          next.add(code);
+        }
+        return next;
+      });
+    }
   };
 
-  // Get countries list
-  const countries = countriesData?.countries ?? [];
+  // Play animation tick handler
+  const handlePlayTick = useCallback(() => {
+    if (activeView === 'line') {
+      // For line chart, animate the end of the range
+      setYearRange(prev => {
+        if (!prev) return prev;
+        const newEnd = prev[1] + 1;
+        if (newEnd > availableYearRange[1]) {
+          return prev; // Stop at max
+        }
+        return [prev[0], newEnd];
+      });
+      return yearRange ? yearRange[1] < availableYearRange[1] : false;
+    } else {
+      // For other views, animate single year
+      setSingleYear(prev => {
+        const next = prev + 1;
+        if (next > availableYearRange[1]) {
+          return prev;
+        }
+        return next;
+      });
+      return singleYear < availableYearRange[1];
+    }
+  }, [activeView, availableYearRange, yearRange, singleYear]);
 
-  // Get population series data in the same order as selected countries
-  const orderedPopulationData = useMemo(() => {
-    if (!populationData?.series) return [];
-    
-    // Create a map for quick lookup
-    const seriesMap = new Map(
-      populationData.series.map(s => [s.code, s])
-    );
-    
-    // Return series in the order of selection (based on countries list order)
-    return countries
-      .filter(c => selectedCodes.has(c.code))
-      .map(c => seriesMap.get(c.code))
-      .filter((s): s is NonNullable<typeof s> => s !== undefined);
-  }, [populationData, countries, selectedCodes]);
+  // Reset animation when view changes
+  const handleViewChange = (view: ViewType) => {
+    setActiveView(view);
+    setIsPlaying(false);
+  };
+
+  // Determine sidebar mode based on active view
+  const sidebarMode: SidebarMode = useMemo(() => {
+    if (activeView === 'map') return 'disabled';
+    if (activeView === 'pie') return 'labels';
+    return 'select';
+  }, [activeView]);
+
+  // Determine which codes to show as selected in sidebar
+  const sidebarSelectedCodes = useMemo(() => {
+    if (activeView === 'pie') return labeledCountries;
+    return selectedCodes;
+  }, [activeView, labeledCountries, selectedCodes]);
+
+  // Show single year slider for pie/bar/map, range for line
+  const showRangeSlider = activeView === 'line';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
@@ -101,50 +328,98 @@ export default function App() {
           </div>
         </header>
 
+        {/* Chart tabs and play button */}
+        <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
+          <ChartTabs activeView={activeView} onViewChange={handleViewChange} />
+          <PlayButton
+            isPlaying={isPlaying}
+            onToggle={() => setIsPlaying(prev => !prev)}
+            onTick={handlePlayTick}
+            intervalMs={100}
+          />
+        </div>
+
         {/* Main content */}
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
           {/* Chart section */}
-          <div className="space-y-6">
+          <div className="space-y-0">
             {/* Chart card */}
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-lg font-semibold text-gray-700">
-                  Population Over Time
+                  {activeView === 'line' && 'Population Over Time'}
+                  {activeView === 'pie' && 'Population Share'}
+                  {activeView === 'bar' && 'Population Comparison'}
+                  {activeView === 'map' && 'World Population Map'}
                 </h2>
-                {isLoadingPopulation && (
-                  <div className="flex items-center gap-2 text-sm text-gray-400">
-                    <div className="w-4 h-4 border-2 border-pastel-mauve/30 border-t-pastel-mauve rounded-full animate-spin" />
-                    Loading...
-                  </div>
+              </div>
+              
+              <div className="h-[400px]">
+                {activeView === 'line' && (
+                  <PopulationChart data={lineChartData} yearRange={effectiveYearRange} />
+                )}
+                {activeView === 'pie' && (
+                  <PieChart 
+                    data={pieChartData} 
+                    showLabels={labeledCountries.size > 0}
+                    year={singleYear} 
+                  />
+                )}
+                {activeView === 'bar' && (
+                  <BarChart data={barChartData} year={singleYear} />
+                )}
+                {activeView === 'map' && (
+                  <WorldMap data={worldMapData} year={singleYear} />
                 )}
               </div>
-              <div className="h-[400px]">
-                <PopulationChart 
-                  data={orderedPopulationData} 
-                  yearRange={yearRange}
-                />
-              </div>
-            </div>
 
-            {/* Year slider */}
-            <YearRangeSlider
-              min={MIN_YEAR}
-              max={MAX_YEAR}
-              values={yearRange}
-              onChange={setYearRange}
-            />
+              {/* Year controls inside the card - only render when data is loaded */}
+              {data && (
+                <div className="mt-6 pt-6 border-t border-gray-100">
+                  {showRangeSlider ? (
+                    <YearRangeSlider
+                      min={availableYearRange[0]}
+                      max={availableYearRange[1]}
+                      values={effectiveYearRange}
+                      onChange={setYearRange}
+                      embedded
+                    />
+                  ) : (
+                    <YearSlider
+                      min={availableYearRange[0]}
+                      max={availableYearRange[1]}
+                      value={singleYear}
+                      onChange={setSingleYear}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Sidebar */}
-          <div className="lg:h-[calc(100vh-12rem)] lg:sticky lg:top-8">
+          {/* Sidebar - matches chart card height */}
+          <div className="lg:sticky lg:top-8">
             <CountrySidebar
               countries={countries}
-              selectedCodes={selectedCodes}
+              selectedCodes={sidebarSelectedCodes}
               onToggle={handleToggle}
-              isLoading={isLoadingCountries}
+              isLoading={isLoading}
+              mode={sidebarMode}
             />
           </div>
         </div>
+
+        {/* Data Table - always visible */}
+        {availableYearRange && (
+          <div className="mt-8">
+            <DataTable 
+              data={tableData} 
+              yearRange={effectiveYearRange}
+              allYears={allYears}
+              availableYearRange={availableYearRange}
+            />
+          </div>
+        )}
 
         {/* Footer */}
         <footer className="mt-12 text-center text-xs text-gray-400">
@@ -154,4 +429,3 @@ export default function App() {
     </div>
   );
 }
-
